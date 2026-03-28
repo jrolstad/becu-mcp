@@ -1,5 +1,7 @@
 # becu-mcp
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that provides read-only access to your [BECU](https://www.becu.org) accounts via browser automation. Use it with Claude Code or any MCP-compatible client to query account balances and transaction history conversationally.
 
 ## What it does
