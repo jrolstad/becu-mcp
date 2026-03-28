@@ -39,31 +39,45 @@ Authentication is handled automatically using Playwright to drive a Chromium bro
    playwright install chromium
    ```
 
-4. Create a `.env` file with your BECU credentials:
-   ```bash
-   cp .env.example .env
-   ```
-   Then edit `.env`:
-   ```
-   BECU_USERNAME=your_username_here
-   BECU_PASSWORD=your_password_here
-   ```
+4. Set your BECU credentials using one of the two options below.
 
 ### Configure with Claude Code
 
-Add the server to your Claude Code MCP settings (`~/.claude/settings.json`):
+Add the server to your Claude Code MCP settings (`~/.claude.json` under `mcpServers`). Credentials can be provided in the MCP config directly (recommended) or via a `.env` file.
+
+**Option A — credentials in MCP config (recommended)**
+
+Pass credentials as environment variables in the MCP server entry. This keeps everything in one place and avoids needing a `.env` file on disk.
 
 ```json
 {
   "mcpServers": {
     "becu": {
+      "type": "stdio",
       "command": "python",
       "args": ["/path/to/becu-mcp/server.py"],
-      "cwd": "/path/to/becu-mcp"
+      "env": {
+        "BECU_USERNAME": "your_username_here",
+        "BECU_PASSWORD": "your_password_here"
+      }
     }
   }
 }
 ```
+
+**Option B — `.env` file**
+
+Create a `.env` file in the repo directory:
+```bash
+cp .env.example .env
+```
+Then edit `.env`:
+```
+BECU_USERNAME=your_username_here
+BECU_PASSWORD=your_password_here
+```
+
+The server loads this automatically via `python-dotenv` on startup. The `.env` file is gitignored.
 
 ## Usage
 
