@@ -70,7 +70,7 @@ Add the server to your Claude Code MCP settings (`~/.claude/settings.json`):
 Once connected, you can ask Claude things like:
 
 - "List my BECU accounts with their balances"
-- "What are the last 20 transactions from Josh and Bethany - Checking?"
+- "What are the last 20 transactions from My Checking?"
 - "What's the balance on my savings account?"
 - "How much YTD interest has the Annual Payments savings account earned?"
 
