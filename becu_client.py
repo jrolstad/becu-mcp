@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -8,6 +9,7 @@ from bs4 import BeautifulSoup
 from playwright.async_api import async_playwright, BrowserContext, Page
 
 SESSION_FILE = Path(__file__).parent / "session.json"
+SESSION_MAX_AGE = 15 * 60  # 15 minutes in seconds
 SUMMARY_URL = "https://onlinebanking.becu.org/BECUBankingWeb/Accounts/Summary.aspx"
 ACTIVITY_URL = "https://onlinebanking.becu.org/BECUBankingWeb/Accounts/Activity.aspx"
 LOGIN_DOMAIN = "auth.secure.becu.org"
@@ -22,23 +24,22 @@ async def _login(page: Page) -> None:
     password = os.environ["BECU_PASSWORD"]
 
     await page.goto(SUMMARY_URL)
-    await page.wait_for_load_state("networkidle")
+    await page.wait_for_load_state("load")
 
     if _is_logged_in(page):
         return
 
     # Fill login form on auth.secure.becu.org
-    await page.fill('input[type="text"], input[name*="user"], input[id*="user"]', username)
-    await page.fill('input[type="password"]', password)
+    await page.fill('input[name="username"]', username)
+    await page.fill('input[name="password"]', password)
     await page.click('button[type="submit"], input[type="submit"]')
-    await page.wait_for_load_state("networkidle")
+    await page.wait_for_load_state("load")
 
     # If MFA is required, wait for user to complete it (up to 60 seconds)
     if LOGIN_DOMAIN in page.url:
         print("MFA may be required. Please complete authentication in the browser window...")
-        await page.wait_for_url(f"**/{SUMMARY_URL.split('becu.org')[1]}**", timeout=60000)
-
-    await page.wait_for_load_state("networkidle")
+        await page.wait_for_url(f"**{SUMMARY_URL}**", timeout=60000)
+        await page.wait_for_load_state("load", timeout=10000)
 
 
 async def _save_session(context: BrowserContext) -> None:
@@ -48,6 +49,10 @@ async def _save_session(context: BrowserContext) -> None:
 
 async def _load_session(context: BrowserContext) -> bool:
     if not SESSION_FILE.exists():
+        return False
+    age = time.time() - SESSION_FILE.stat().st_mtime
+    if age > SESSION_MAX_AGE:
+        SESSION_FILE.unlink()
         return False
     try:
         cookies = json.loads(SESSION_FILE.read_text())
@@ -59,38 +64,52 @@ async def _load_session(context: BrowserContext) -> bool:
 
 async def _get_page_html(url: str, params: Optional[dict] = None) -> str:
     """Fetch a BECU page, handling auth as needed. Returns raw HTML."""
-    async with async_playwright() as p:
-        # Use headless if we have a saved session; show browser for initial auth/MFA
-        headless = SESSION_FILE.exists()
-        browser = await p.chromium.launch(headless=headless)
-        context = await browser.new_context()
+    full_url = url
+    if params:
+        qs = "&".join(f"{k}={v}" for k, v in params.items())
+        full_url = f"{url}?{qs}"
 
-        await _load_session(context)
-        page = await context.new_page()
-
-        full_url = url
-        if params:
-            qs = "&".join(f"{k}={v}" for k, v in params.items())
-            full_url = f"{url}?{qs}"
-
-        await page.goto(full_url)
-        await page.wait_for_load_state("networkidle")
-
-        # Re-authenticate if session expired
-        if not _is_logged_in(page):
-            if headless:
-                # Session expired — reopen with visible browser for MFA
-                await browser.close()
-                browser = await p.chromium.launch(headless=False)
-                context = await browser.new_context()
-                page = await context.new_page()
+    async def _auth_and_save(p) -> None:
+        """Open a visible browser, log in, save session, then close."""
+        browser = await p.chromium.launch(headless=False)
+        try:
+            context = await browser.new_context()
+            page = await context.new_page()
             await _login(page)
-            await page.goto(full_url)
-            await page.wait_for_load_state("networkidle")
+            await _save_session(context)
+        finally:
+            await browser.close()
 
-        html = await page.content()
-        await _save_session(context)
-        await browser.close()
+    async with async_playwright() as p:
+        # If no valid session, authenticate in a visible browser first, then close it
+        if not SESSION_FILE.exists():
+            await _auth_and_save(p)
+
+        # Fetch data headlessly using the saved session
+        browser = await p.chromium.launch(headless=True)
+        try:
+            context = await browser.new_context()
+            await _load_session(context)
+            page = await context.new_page()
+
+            await page.goto(full_url, wait_until="load")
+
+            # If session expired mid-flight, re-auth visibly then retry headless
+            if not _is_logged_in(page):
+                await browser.close()
+                await _auth_and_save(p)
+
+                browser = await p.chromium.launch(headless=True)
+                context = await browser.new_context()
+                await _load_session(context)
+                page = await context.new_page()
+                await page.goto(full_url, wait_until="load")
+
+            html = await page.content()
+            await _save_session(context)
+        finally:
+            await browser.close()
+
         return html
 
 

@@ -1,13 +1,27 @@
 #!/usr/bin/env python3
 """BECU MCP Server - read-only access to BECU account data via browser automation."""
 
-import os
+import time
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
 
 load_dotenv()
 
 mcp = FastMCP("becu")
+
+CACHE_MAX_AGE = 60 * 60  # 60 minutes in seconds
+_cache: dict = {}
+
+
+def _cache_get(key: str):
+    entry = _cache.get(key)
+    if entry and (time.time() - entry["ts"]) < CACHE_MAX_AGE:
+        return entry["data"]
+    return None
+
+
+def _cache_set(key: str, data) -> None:
+    _cache[key] = {"ts": time.time(), "data": data}
 
 
 @mcp.tool()
@@ -18,8 +32,13 @@ async def get_accounts() -> list[dict]:
     Returns a list of accounts including name, account number, current balance,
     available balance, and the account index needed for get_transactions.
     """
+    cached = _cache_get("accounts")
+    if cached is not None:
+        return cached
     from becu_client import get_accounts as _get_accounts
-    return await _get_accounts()
+    result = await _get_accounts()
+    _cache_set("accounts", result)
+    return result
 
 
 @mcp.tool()
@@ -32,8 +51,14 @@ async def get_balance(account_index: int) -> dict | None:
 
     Returns the account with its balance details, or None if not found.
     """
+    key = f"balance:{account_index}"
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
     from becu_client import get_balance as _get_balance
-    return await _get_balance(account_index)
+    result = await _get_balance(account_index)
+    _cache_set(key, result)
+    return result
 
 
 @mcp.tool()
@@ -47,8 +72,23 @@ async def get_transactions(account_index: int, days: int = 30) -> list[dict]:
 
     Returns a list of transactions with date, description, amount, and running balance.
     """
+    key = f"transactions:{account_index}:{days}"
+    cached = _cache_get(key)
+    if cached is not None:
+        return cached
     from becu_client import get_transactions as _get_transactions
-    return await _get_transactions(account_index, days)
+    result = await _get_transactions(account_index, days)
+    _cache_set(key, result)
+    return result
+
+
+@mcp.tool()
+async def reset_cache() -> str:
+    """
+    Clear all cached BECU data, forcing fresh data to be fetched on the next request.
+    """
+    _cache.clear()
+    return "Cache cleared."
 
 
 if __name__ == "__main__":
