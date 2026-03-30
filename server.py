@@ -9,7 +9,7 @@ load_dotenv()
 
 mcp = FastMCP("becu")
 
-CACHE_MAX_AGE = 60 * 60  # 60 minutes in seconds
+CACHE_MAX_AGE = 6 * 60 * 60  # 6 hours in seconds
 _cache: dict = {}
 
 
