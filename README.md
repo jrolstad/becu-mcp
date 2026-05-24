@@ -4,6 +4,12 @@
 
 An [MCP (Model Context Protocol)](https://modelcontextprotocol.io) server that provides read-only access to your [BECU](https://www.becu.org) accounts via browser automation. Use it with Claude Code or any MCP-compatible client to query account balances and transaction history conversationally.
 
+> **Fork of [jrolstad/becu-mcp](https://github.com/jrolstad/becu-mcp)** with the following improvements:
+> - `get_transactions` now supports exact date ranges (`start_date`/`end_date`) in addition to `days`
+> - Transaction export uses a **direct HTTP POST** to BECU's CSV download endpoint instead of driving the AJAX UI — significantly faster and more reliable
+> - Session validation checks the Activity page directly, catching `SystemUnavailable` redirects that the original missed
+> - `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` env var lets you point to a custom Chromium binary (e.g. snap-installed Chromium on Ubuntu 24.04+)
+
 ## What it does
 
 Exposes three tools:
@@ -12,7 +18,7 @@ Exposes three tools:
 |------|-------------|
 | `get_accounts` | Returns all accounts with current balance, available balance, and YTD interest |
 | `get_balance` | Returns balance details for a single account by index |
-| `get_transactions` | Returns transaction history for an account (date, description, amount, balance) |
+| `get_transactions` | Returns transaction history for an account; supports `days`, `start_date`, and `end_date` |
 
 Authentication is handled automatically using Playwright to drive a Chromium browser. Sessions are persisted to `session.json` so subsequent calls run headlessly. If the session expires or MFA is required, a visible browser window opens for you to complete login.
 
@@ -21,25 +27,32 @@ Authentication is handled automatically using Playwright to drive a Chromium bro
 ### Prerequisites
 
 - Python 3.11+
-- [uv](https://docs.astral.sh/uv/) or pip
+- [uv](https://docs.astral.sh/uv/) (recommended — avoids conflicts with Ubuntu's managed Python)
+
+Install `uv` if you don't have it:
+```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
 
 ### Steps
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/jrolstad/becu-mcp.git
+   git clone https://github.com/ajbogh/becu-mcp.git
    cd becu-mcp
    ```
 
-2. Install dependencies:
+2. Create a virtual environment and install dependencies:
    ```bash
-   pip install -r requirements.txt
+   uv venv
+   uv pip install -r requirements.txt
    ```
 
 3. Install Playwright's Chromium browser:
    ```bash
-   playwright install chromium
+   .venv/bin/playwright install chromium
    ```
+   > **Ubuntu 24.04+:** Playwright's bundled Chromium may not be supported. Use snap Chromium instead — see [Ubuntu / snap Chromium](#ubuntu--snap-chromium) below.
 
 4. Set your BECU credentials using one of the two options below.
 
@@ -56,7 +69,7 @@ Pass credentials as environment variables in the MCP server entry. This keeps ev
   "mcpServers": {
     "becu": {
       "type": "stdio",
-      "command": "python",
+      "command": "/path/to/becu-mcp/.venv/bin/python",
       "args": ["/path/to/becu-mcp/server.py"],
       "env": {
         "BECU_USERNAME": "your_username_here",
@@ -89,6 +102,22 @@ Once connected, you can ask Claude things like:
 - "What are the last 20 transactions from My Checking?"
 - "What's the balance on my savings account?"
 - "How much YTD interest has the Annual Payments savings account earned?"
+- "Get my checking transactions from April 1 through April 30"
+- "Show me all transactions between 01/01/2026 and 03/31/2026"
+
+### Ubuntu / snap Chromium
+
+If you're on Ubuntu 24.04+ where Playwright's bundled Chromium isn't supported, use the system snap Chromium instead:
+
+```bash
+sudo snap install chromium
+```
+
+Then set the env var in your MCP config or `.env`:
+
+```
+PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/snap/bin/chromium
+```
 
 ## Authentication and sessions
 
@@ -110,28 +139,31 @@ requirements.txt # Python dependencies
 session.json     # Persisted browser session cookies (gitignored)
 ```
 
-### How scraping works
+### How it works
 
-`becu_client.py` uses Playwright to load pages from `onlinebanking.becu.org`, then parses the HTML with BeautifulSoup. The BECU pages use a [Tablesaw](https://github.com/filamentgroup/tablesaw) responsive table library that embeds column labels inside each `<td>` as `<b class="tablesaw-cell-label">` elements. The parser extracts these labels to identify each cell's field regardless of column order, making it resilient to layout changes.
+`becu_client.py` uses Playwright to log in to `onlinebanking.becu.org` and persist the session cookies. Once authenticated, subsequent requests run headlessly — the browser is only opened visibly when a login or MFA step is required.
+
+Account data (`get_accounts`, `get_balance`) is scraped from the Summary page HTML using BeautifulSoup. Transaction data (`get_transactions`) skips the UI entirely: it loads the Activity page to establish session context, then makes a direct HTTP POST to BECU's CSV export endpoint and parses the response. This is faster and more reliable than driving the page's date-picker and download controls.
 
 Key functions:
 
-- `_get_page_html()` — fetches a page, handles auth/session management
-- `_cell_label_and_value()` — extracts the field label and value from a tablesaw `<td>`
+- `_with_authenticated_page(callback)` — ensures a valid session exists, then runs a callback with the authenticated page
+- `_export_transactions_csv()` — POSTs to BECU's CSV download endpoint and returns parsed transactions
+- `_parse_becu_csv_bytes()` — parses raw CSV bytes into transaction dicts, handles Debit/Credit split columns
 - `_parse_currency()` — converts `"$1,234.56"` to `1234.56`
 - `get_accounts()` — scrapes the Summary page, deduplicates by account number
-- `get_transactions()` — scrapes the Activity page, filters out summary/non-transaction rows
+- `get_transactions()` — exports transactions via CSV for an exact date range
 
 ### Running locally
 
 ```bash
-python server.py
+.venv/bin/python server.py
 ```
 
 Or via the MCP CLI:
 
 ```bash
-mcp dev server.py
+.venv/bin/mcp dev server.py
 ```
 
 ### Adding new tools
